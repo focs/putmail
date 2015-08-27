@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
-# putmail_enqueue.py	Read mail from standard input and save message and
-#			program arguments to a mail queue.
+# putmail_enqueue.py    Read mail from standard input and save message and
+#           program arguments to a mail queue.
 #
-# (c)	Ricardo García González
-#	sarbalap-sourceforge _at_ yahoo _dot_ es
+# (c)   Ricardo García González
+#   sarbalap-sourceforge _at_ yahoo _dot_ es
 #
 # This tiny script is distributed under the X Consortium License. See
 # LICENSE file for more details.
@@ -20,9 +20,9 @@ import cPickle
 
 ### Initialize ###
 try:
-	gettext.install("putmail_enqueue.py")	# Always before using _()
+    gettext.install("putmail_enqueue.py")   # Always before using _()
 except:
-	pass
+    pass
 
 ### Constants ###
 PUTMAIL_DIR = ".putmail"
@@ -35,39 +35,39 @@ ERROR_DATA_OUTPUT = _("Error: unable to write data to queue file")
 
 ### Main program ###
 if not os.environ.has_key(HOME_EV):
-	sys.exit(ERROR_HOME_UNSET)
+    sys.exit(ERROR_HOME_UNSET)
 
 queue_dir = os.path.join(os.getenv(HOME_EV), PUTMAIL_DIR, QUEUE_SUBDIR)
 
 # Create message file
 try:
-	(msgfd, msgfname) = tempfile.mkstemp("", "", queue_dir)
-	msgfile = os.fdopen(msgfd, "w")
+    (msgfd, msgfname) = tempfile.mkstemp("", "", queue_dir)
+    msgfile = os.fdopen(msgfd, "w")
 except (IOError, OSError):
-	sys.exit(ERROR_CREATE_TEMPFILE)
+    sys.exit(ERROR_CREATE_TEMPFILE)
 
 # Read parameters and message contents
 params = sys.argv
 try:
-	message = sys.stdin.read()
+    message = sys.stdin.read()
 except IOError:
-	msgfile.close()
-	os.unlink(msgfname)
-	sys.exit(ERROR_MESSAGE_STDIN)
+    msgfile.close()
+    os.unlink(msgfname)
+    sys.exit(ERROR_MESSAGE_STDIN)
 
 # Write data
 try:
-	cPickle.dump((params, message), msgfile)
+    cPickle.dump((params, message), msgfile)
 except IOError:
-	try:
-		msgfile.close()
-	except:
-		pass
-	try:
-		os.unlink(msgfname)
-	except:
-		pass
-	sys.exit(ERROR_DATA_OUTPUT)
+    try:
+        msgfile.close()
+    except:
+        pass
+    try:
+        os.unlink(msgfname)
+    except:
+        pass
+    sys.exit(ERROR_DATA_OUTPUT)
 
 # Close file and exit
 msgfile.close()
