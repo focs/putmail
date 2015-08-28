@@ -20,6 +20,7 @@ import email
 import os
 import sys
 import socket
+import ssl
 import datetime
 
 import subprocess as sb
@@ -42,9 +43,10 @@ CONFIG_SECTION = 'config'
 OPTION_SERVER = 'server'
 OPTION_EMAIL = 'email'
 OPTION_TLS = 'tls'
+OPTION_TLS_VERSIONS = 'tls_versions'
 OPTION_LOGIN = 'username'
 OPTION_PASSWORD = 'password'
-OPTION_KEYCHAIN= 'keychain'
+OPTION_KEYCHAIN = 'keychain'
 OPTION_PORT = 'port'
 OPTION_QUIET = 'quiet'
 
@@ -59,6 +61,23 @@ server = your.smtp.server.example.com
 email = your.email@example.com
 """
 
+TLS_MODE_NATIVE = 'native'
+TLS_MODE_STARTTLS = 'starttls'
+
+NO_TLS_VERSION_FLAGS = {}
+for config_option, attribute in {
+        'ssl2': 'OP_NO_SSLv2',
+        'ssl3': 'OP_NO_SSLv3',
+        'tls1': 'OP_NO_TLSv1',
+        'tls1_1': 'OP_NO_TLSv1_1',
+        'tls1_2': 'OP_NO_TLSv1_2',
+        'tls1_3': 'OP_NO_TLSv1_3',  # FutureProofing[tm]
+        }.items():
+    try:
+        NO_TLS_VERSION_FLAGS[config_option] = getattr(ssl, attribute)
+    except AttributeError:
+        pass
+
 # Internal errors
 ERROR_HOME_UNSET = 'Error: %s environment variable not set' % HOME_EV
 ERROR_CONFIG_NONEXISTANT = 'Error: config file %s not present'
@@ -69,11 +88,13 @@ ERROR_CONFIG_KEYCHAIN = 'Error: invalid keychain in config file'
 ERROR_READ_MAIL = 'Error: parse error reading the mail message'
 ERROR_NO_RECIPIENTS = 'Error: no recipients for the message'
 ERROR_TLS = 'Error: malformed option "%s"' % OPTION_TLS
+ERROR_TLS_VERSION = 'Error: malformed option "%s"' % OPTION_TLS_VERSIONS
 ERROR_PORT = 'Error: malformed option "%s"' % OPTION_PORT
 ERROR_QUIET = 'Error: malformed option "%s"' % OPTION_QUIET
 ERROR_O_OPTION = 'Error: missing option for -o'
 ERROR_OPTION_ARGS = 'Error: missing arguments for last option'
 ERROR_UNKNOWN_OPTION = 'Error: unknown option "%s"'
+ERROR_OLD_OPENSSL = 'Error: openssl is too far out of date. Please update to at least 0.9.8m'
 
 # SMTP and network errors
 ERROR_REFUSED = 'Error: all recipients rejected by server'
@@ -91,8 +112,12 @@ ERROR_UNKNOWN = 'Error: unknown problem happened'
 WARNING_REJECTED = 'Warning: the following recipients were rejected:'
 WARNING_QUIT = 'Warning: problem disconnecting but message probably sent'
 WARNING_LOGFILE = 'Warning: unable to write to log file'
-WARNING_CONFIG_UNREADABLE = 'Warning: config file for %s present but no read access, falling back to default config file'
-WARNING_SAMPLE_CONFIG = 'Warning: trying to create sample config file (read manpage and check permissions'
+WARNING_CONFIG_UNREADABLE = (
+    'Warning: config file for %s present but no read access, '
+    'falling back to default config file')
+WARNING_SAMPLE_CONFIG = (
+    'Warning: trying to create sample config file '
+    '(read manpage and check permissions)')
 
 # Codes
 EXIT_FAILURE = 1
@@ -105,41 +130,42 @@ thePort = None                  # The SMTP port in the server
 theMessage = None               # The E-Mail message
 theRecipients = []              # The recipients of the E-Mail message
 theConfigFilename = None        # The configuration file name
-theTLSFlag = False              # Use TLS or not
+theTLSMode = None               # Use native TLS, STARTTLS, or neither
+theTLSContext = ssl.create_default_context()
 theAuthenticateFlag = False     # Use SMTP authentication or not
 theSMTPLogin = None             # The login name to use with the server
 theSMTPPassword = None          # The corresponding password
 theRcpsFromMailFlag = False     # Take recipients from message or not
 theQuietFlag = False            # Supress program output or not
-theLogFile = None               # The log file name
+theLogPath = None               # The log file name
 
 ### A few auxiliary functions ###
-def handle_error(str, stderr_output, exit_program):
-    fullstr = str + "\n"
+def handle_error(error_string, stderr_output, exit_program):
     try:
-        file(theLogFile, "a").write("%s: %s" % (
-            datetime.datetime.ctime(datetime.datetime.now()), fullstr))
+        with open(theLogPath, "a") as theLogFile:
+            theLogFile.write("%s: %s\n" % (
+                datetime.datetime.now().ctime(), error_string))
     except (IOError, OSError):
-        sys.stderr.write(WARNING_LOGFILE + "\n")
+        print(WARNING_LOGFILE, file=sys.stderr)
 
     if stderr_output:
-        sys.stderr.write(fullstr)
+        print(error_string, file=sys.stderr)
     if exit_program:
         sys.exit(EXIT_FAILURE)
 
-def exit_forcing_print(str):
-    handle_error(str, True, True)
+def exit_forcing_print(string):
+    handle_error(string, True, True)
 
-def exit_conditional_print(str):
-    handle_error(str, not theQuietFlag, True)
+def exit_conditional_print(string):
+    handle_error(string, not theQuietFlag, True)
 
-def conditional_print(str):
-    handle_error(str, not theQuietFlag, False)
+def conditional_print(string):
+    handle_error(string, not theQuietFlag, False)
 
-def force_print(str):
-    handle_error(str, True, False)
+def force_print(string):
+    handle_error(string, True, False)
 
-def check_status((code, message)):
+def check_status(code, message):
     if code >= FIRST_ERROR_CODE:
         exit_conditional_print(ERROR_OTHER % (code, message))
 
@@ -147,8 +173,8 @@ def keychain(keychainType):
     if keychainType == 'osx':
         return osxkeychain
 
-def osxkeychain(service, type="internet"):
-    cmd = """/usr/bin/security find-%s-password -gs %s""" % (type, service)
+def osxkeychain(service, passwordType="internet"):
+    cmd = """/usr/bin/security find-%s-password -gs %s""" % (passwordType, service)
     args = shlex.split(cmd)
     t = sb.check_output(args, stderr=sb.STDOUT)
     lines = t.split('\n')
@@ -157,13 +183,13 @@ def osxkeychain(service, type="internet"):
     return passwd
 
 ### Check for HOME present (needed later, checking now saves a lot of work) ###
-if not os.environ.has_key(HOME_EV):
+if not HOME_EV in os.environ:
     # Note: I still can't use exit_forcing_print() at this point, the log
     # filename is not set.
     sys.exit(ERROR_HOME_UNSET + "\n")
 
 ### Build the log filename now ###
-theLogFile = os.path.join(os.environ[HOME_EV], CONFIG_DIRECTORY, LOG_FILE)
+theLogPath = os.path.join(os.environ[HOME_EV], CONFIG_DIRECTORY, LOG_FILE)
 
 ###############################################
 # First step: Parse the command line options. #
@@ -186,18 +212,18 @@ try:
                       '-bv', '-G', '-i', '-n', '-v']
 
     single_options_exit = ['-bd', '-bD', '-bh', '-bH', '-bp', '-bP', '-qf',
-                           '-bi' ]
+                           '-bi']
 
-    one_argument_options = [ '-B', '-C', '-D', '-d', '-F', '-h', '-L', '-N',
-                             '-O', '-p', '-R', '-r', '-V', '-X' ]
+    one_argument_options = ['-B', '-C', '-D', '-d', '-F', '-h', '-L', '-N',
+                            '-O', '-p', '-R', '-r', '-V', '-X']
 
     one_argument_options_exit = ['-qG', '-qI', '-qQ', '-qR', '-qS', '-q!I',
-                                 '-q!Q', '-q!R', '-q!S' ]
+                                 '-q!Q', '-q!R', '-q!S']
 
-    optional_extra_chars_options_exit = [ '-q', '-qp', '-Q' ]
+    optional_extra_chars_options_exit = ['-q', '-qp', '-Q']
 
     # Eat arguments until there's none left
-    while (len(program_args) > 0):
+    while program_args:
         if program_args[0] == '--': # Remaining options are recipients
             theRecipients.extend(program_args[1:])
             break
@@ -229,12 +255,12 @@ try:
             del program_args[0]
             del program_args[0]
             direct_exit = True
-        elif (sum([program_args[0].startswith(x) # First chars match
-                   for x in one_argument_options_exit]) > 0):
+        elif any(program_args[0].startswith(x)
+                 for x in one_argument_options_exit):
             del program_args[0]
             direct_exit = True
-        elif (sum([program_args[0].startswith(x) # First chars match
-                   for x in optional_extra_chars_options_exit]) > 0):
+        elif any(program_args[0].startswith(x)
+                 for x in optional_extra_chars_options_exit):
             del program_args[0]
             direct_exit = True
         elif program_args[0].startswith('-o'):  # Weird case
@@ -258,15 +284,15 @@ except IndexError:
 if print_info:
     programName = os.path.basename(sys.argv[0])
     version = "%s %s" % (programName, __version__)
-    print version
-    print "  type `man %s` for more information" % programName
+    print(version)
+    print("  type `man %s` for more information" % programName)
 
 # Options indicated direct exit
 if direct_exit:
     sys.exit()
 
 # No addresses found?
-if len(theRecipients) == 0 and not theRcpsFromMailFlag:
+if not theRecipients and not theRcpsFromMailFlag:
     exit_forcing_print(ERROR_NO_RECIPIENTS)
 
 ######################################################
@@ -313,8 +339,9 @@ if not os.path.exists(configPath):
         dirname = os.path.dirname(configPath)
         if not os.path.isdir(dirname):
             os.makedirs(dirname)
-        file(configPath, "w").write(DEFAULT_CONFIG)
-    except:
+        with open(configPath, "w") as configFile:
+            configFile.write(DEFAULT_CONFIG)
+    except OSError:
         exit_forcing_print(ERROR_CONFIG_CREATE)
 
     sys.exit(EXIT_FAILURE)
@@ -328,7 +355,7 @@ if not os.access(configPath, os.R_OK):
 config = ConfigParser.ConfigParser()
 try:
     config.read([configPath])
-except:
+except OSError:
     exit_forcing_print(ERROR_CONFIG_PARSE)
 
 ### Check conditions for bad configurations ###
@@ -351,12 +378,28 @@ theSMTPServer = config.get(CONFIG_SECTION, OPTION_SERVER)
 if theEMailAddress is None: # "Envelope from" if -f was not present
     theEMailAddress = config.get(CONFIG_SECTION, OPTION_EMAIL)
 
-try:    # TLS
-    if (config.has_option(CONFIG_SECTION, OPTION_TLS) and
-            config.getboolean(CONFIG_SECTION, OPTION_TLS)):
-        theTLSFlag = True
-except ValueError:
-    exit_forcing_print(ERROR_TLS)
+if config.has_option(CONFIG_SECTION, OPTION_TLS):   # TLS
+    theTLSMode = config.get(CONFIG_SECTION, OPTION_TLS)
+    try:
+        if not config.getboolean(CONFIG_SECTION, OPTION_TLS):
+            theTLSMode = None
+    except ValueError:
+        pass
+    if theTLSMode not in {TLS_MODE_NATIVE, TLS_MODE_STARTTLS, None}:
+        exit_forcing_print(ERROR_TLS)
+
+if config.has_option(CONFIG_SECTION, OPTION_TLS_VERSIONS):    # TLS versions
+    for flag in NO_TLS_VERSION_FLAGS.values():
+        theTLSContext.options |= flag
+    for version in config.get(CONFIG_SECTION, OPTION_TLS_VERSIONS).split():
+        try:
+            theTLSContext.options &= ~NO_TLS_VERSION_FLAGS[version]
+        except KeyError:
+            exit_forcing_print(ERROR_TLS_VERSION)
+        # openssls older than 0.9.8m will cause a ValueError
+        # to be raised when we try to unset an option
+        except ValueError:
+            exit_forcing_print(ERROR_OLD_OPENSSL)
 
 try:    # Quiet
     if (config.has_option(CONFIG_SECTION, OPTION_QUIET) and
@@ -382,7 +425,7 @@ try:    # Port
     if config.has_option(CONFIG_SECTION, OPTION_PORT):
         thePort = config.getint(CONFIG_SECTION, OPTION_PORT)
         if thePort < 0 or thePort > HIGHEST_PORT:
-            raise ValueError
+            raise ValueError()
     else:
         thePort = DEFAULT_PORT
 except ValueError:
@@ -416,7 +459,7 @@ if theMessage.has_key(BCC_HEADER):
     del theMessage[BCC_HEADER]
 
 # Still no addresses found?
-if len(theRecipients) == 0:
+if not theRecipients:
     exit_forcing_print(ERROR_NO_RECIPIENTS)
 
 ####################################################
@@ -424,17 +467,22 @@ if len(theRecipients) == 0:
 ####################################################
 
 try:
-    server = smtplib.SMTP()
+    if theTLSMode == TLS_MODE_NATIVE:
+        server = smtplib.SMTP_SSL(context=theTLSContext)
+    else:
+        server = smtplib.SMTP()
     #server.set_debuglevel(True)
-    check_status(server.connect(theSMTPServer, thePort))
-    check_status(server.ehlo())
-    if theTLSFlag:
-        check_status(server.starttls())
-        check_status(server.ehlo()) # Repeat EHLO after starting TLS
+    check_status(*server.connect(theSMTPServer, thePort))
+    check_status(*server.ehlo())
+    if theTLSMode == TLS_MODE_STARTTLS:
+        check_status(*server.starttls(context=theTLSContext))
+        # SMTP.starttls() discards all knowledge obtained from the server
+        # as per RFC 3207. This means we need to EHLO again.
+        check_status(*server.ehlo())
     if theAuthenticateFlag:
-        check_status(server.login(theSMTPLogin, theSMTPPassword))
-    rejected = server.sendmail(theEMailAddress, theRecipients,
-                               theMessage.as_string())
+        check_status(*server.login(theSMTPLogin, theSMTPPassword))
+    rejectedRecipients = server.sendmail(theEMailAddress, theRecipients,
+                                         theMessage.as_string())
 except smtplib.SMTPServerDisconnected:
     exit_conditional_print(ERROR_DISCONNECTED)
 except smtplib.SMTPSenderRefused:
@@ -449,25 +497,21 @@ except smtplib.SMTPHeloError:
     exit_conditional_print(ERROR_HELO)
 except smtplib.SMTPAuthenticationError:
     exit_conditional_print(ERROR_AUTH)
-except smtplib.SMTPResponseException, err:
+except smtplib.SMTPResponseException as err:
     exit_conditional_print(ERROR_OTHER % (err.smtp_code, err.smtp_error))
-except (socket.error, socket.herror, socket.gaierror), err:
-    exit_conditional_print(ERROR_NETWORK % (theSMTPServer, err[1]))
-except socket.timeout, err:
+except socket.timeout as err:
     exit_conditional_print(ERROR_NETWORK % (theSMTPServer, err))
 except smtplib.SMTPException:
     exit_conditional_print(ERROR_UNKNOWN)
+except (socket.herror, socket.gaierror, OSError) as err:
+    exit_conditional_print(ERROR_NETWORK % (theSMTPServer, err[1]))
 
 try:
     server.quit()
-except:
+except smtplib.SMTPException:
     conditional_print(WARNING_QUIT)
 
 # Check for rejected recipients
-if len(rejected) > 0:
+if rejectedRecipients:
     conditional_print(WARNING_REJECTED)
-    conditional_print('\n'.join(['\t' + email for email in rejected]))
-
-# Good enough
-sys.exit()
-# vim: set ft=python noet sts=4 sw=4 ts=4 :
+    conditional_print('\n'.join(['\t' + email for email in rejectedRecipients]))

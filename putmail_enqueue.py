@@ -16,13 +16,13 @@ import tempfile
 import os
 import os.path
 import gettext
-import cPickle
+import pickle
 
 ### Initialize ###
 try:
     gettext.install("putmail_enqueue.py")   # Always before using _()
-except:
-    pass
+except Exception:
+    _ = lambda s: s
 
 ### Constants ###
 PUTMAIL_DIR = ".putmail"
@@ -34,41 +34,29 @@ ERROR_MESSAGE_STDIN = _("Error: unable to read message from standard input")
 ERROR_DATA_OUTPUT = _("Error: unable to write data to queue file")
 
 ### Main program ###
-if not os.environ.has_key(HOME_EV):
+if not HOME_EV in os.environ:
     sys.exit(ERROR_HOME_UNSET)
 
 queue_dir = os.path.join(os.getenv(HOME_EV), PUTMAIL_DIR, QUEUE_SUBDIR)
 
-# Create message file
 try:
     (msgfd, msgfname) = tempfile.mkstemp("", "", queue_dir)
-    msgfile = os.fdopen(msgfd, "w")
-except (IOError, OSError):
+except OSError:
     sys.exit(ERROR_CREATE_TEMPFILE)
 
-# Read parameters and message contents
-params = sys.argv
 try:
-    message = sys.stdin.read()
-except IOError:
-    msgfile.close()
-    os.unlink(msgfname)
-    sys.exit(ERROR_MESSAGE_STDIN)
-
-# Write data
-try:
-    cPickle.dump((params, message), msgfile)
-except IOError:
-    try:
-        msgfile.close()
-    except:
-        pass
+    with os.fdopen(msgfd, "wb") as msgfile:
+        try:
+            message = sys.stdin.read()
+        except IOError:
+            sys.exit(ERROR_MESSAGE_STDIN)
+        try:
+            pickle.dump((sys.argv, message), msgfile)
+        except IOError:
+            sys.exit(ERROR_DATA_OUTPUT)
+except SystemExit:
     try:
         os.unlink(msgfname)
-    except:
+    except OSError:
         pass
-    sys.exit(ERROR_DATA_OUTPUT)
-
-# Close file and exit
-msgfile.close()
-sys.exit()
+    raise

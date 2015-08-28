@@ -16,13 +16,13 @@ import os
 import os.path
 import glob
 import gettext
-import cPickle
+import pickle
 
 ### Initialize ###
 try:
     gettext.install("putmail_dequeue.py")   # Always before using _()
-except:
-    pass
+except Exception:
+    _ = lambda s: s
 
 ### Constants ###
 PUTMAIL_DIR = ".putmail"
@@ -32,7 +32,7 @@ PUTMAIL_PY = "putmail.py"
 ERROR_HOME_UNSET = _("Error: %s environment variable not set") % HOME_EV
 
 ### Main program ###
-if not os.environ.has_key(HOME_EV):
+if not HOME_EV in os.environ:
     sys.exit(ERROR_HOME_UNSET)
 
 # Get message file names
@@ -43,36 +43,34 @@ files = glob.glob(pattern)
 (total, sent, deleted) = (0, 0, 0)
 for msgfn in files:
     msgbn = os.path.basename(msgfn)
-    print _("[%s] Sending message.") % msgbn
+    print(_("[%s] Sending message.") % msgbn)
 
     try:
-        (params, text) = cPickle.load(open(msgfn))
+        (params, text) = pickle.load(open(msgfn))
 
         # Launch putmail.py and write the message to its stdin
         cmd = "%s %s" % (PUTMAIL_PY, " ".join(params[1:]))
-        child_stdin = os.popen(cmd, "w")
+        child_stdin = os.popen(cmd, "wb")
         child_stdin.write(text)
 
         exit_status = child_stdin.close()
         if not exit_status is None:
-            raise Exception
-        print _("[%s] Message sent.") % msgbn
+            raise Exception()
+        print(_("[%s] Message sent.") % msgbn)
         sent += 1
 
         try:
-            print _("[%s] Deleting message file.") % msgbn
+            print(_("[%s] Deleting message file.") % msgbn)
             os.unlink(msgfn)
-            print _("[%s] Message deleted.") % msgbn
+            print(_("[%s] Message deleted.") % msgbn)
             deleted += 1
 
         except (IOError, OSError):
-            print _("[%s] Message NOT deleted! Fix queue!") % msgbn
+            print(_("[%s] Message NOT deleted! Fix queue!") % msgbn)
 
     except (IOError, OSError):
-        print _("[%s] Message NOT sent.") % msgbn
+        print(_("[%s] Message NOT sent.") % msgbn)
 
     total += 1
-# End of for loop
 
-print _("Total:   %s\nSent:    %s\nDeleted: %s") % (total, sent, deleted)
-sys.exit()
+print(_("Total:   %s\nSent:    %s\nDeleted: %s") % (total, sent, deleted))
