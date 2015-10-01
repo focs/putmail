@@ -99,21 +99,34 @@ The password used when authenticating to the SMTP server.
 The server port. The default value is 25.
 .TP 
 \fItls\fR
-Boolean option to enable or disable TLS. It is disabled by
-default or when its value is \fIno\fR, \fI0\fR, \fIoff\fR
-or \fIfalse\fR. Set it to \fIyes\fR, \fI1\fR, \fIon\fR
-or \fItrue\fR to enable TLS.
+The TLS mode to use, disabled by default or when set to
+\fIoff\fR. Set it to \fInative\fR or \fIstarttls\fR to use TLS.
+When active, \fBputmail.py\fR will refuse to authenticate or
+send mail without TLS.
+.TP
+\fItls_versions\fR
+A whitespace-separated list of TLS versions to use. Ignored
+when \fItls\fR is inactive. Known values: \fIssl2\fR,
+\fIssl3\fR, \fItls1\fR, \fItls1_1\fR, \fItls1_2\fR. Note that
+\fBputmail.py\fR cannot use a TLS version unless it is also
+supported by the underlying Python implementation (and, by
+extension, the underlying OpenSSL implementation). The default
+depends on the Python implementation; at the time of
+publication, it is recommended that this option be set
+manually and include only TLS 1.1 and newer.
 .TP 
 \fIquiet\fR
 Boolean option, disabled by default. When active, errors
 and warnings related to communication with the SMTP server
-will not be printed on screen. See the \fItls\fR option
-for possible values. Use it with care and once you know
-your configuration works. In most cases this will not be
-needed. However, sometimes warnings about improper
-connection shutdown can get really annoying. Errors
-related to malformed configuration files, absence of
-message recipients and others will still be printed.
+will not be printed on screen. It is disabled by default or
+when its value is \fIno\fR, \fI0\fR, \fIoff\fR or \fIfalse\fR.
+Set it to \fIyes\fR, \fI1\fR, \fIon\fR or \fItrue\fR to enable
+TLS. Use it with care and once you know your configuration
+works. In most cases this will not be needed. However,
+sometimes warnings about improper connection shutdown can get
+really annoying. Errors related to malformed configuration
+files, absence of message recipients and others will still be
+printed.
 .SH "COMMAND LINE OPTIONS"
 .LP 
 .TP 
