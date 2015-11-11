@@ -147,8 +147,8 @@ def keychain(keychainType):
     if keychainType == 'osx':
         return osxkeychain
 
-def osxkeychain(service, type="internet"):
-    cmd = """/usr/bin/security find-%s-password -gs %s""" % (type, service)
+def osxkeychain(service, user, passwordType="internet"):
+    cmd = """/usr/bin/security find-%s-password -gs %s -a %s""" % (passwordType, service, user)
     args = shlex.split(cmd)
     t = sb.check_output(args, stderr=sb.STDOUT)
     lines = t.split('\n')
@@ -371,7 +371,7 @@ if config.has_option(CONFIG_SECTION, OPTION_LOGIN): # Login/password
         # if config.has_option(CONFIG_SECTION, OPTION_KEYCHAIN):
         keychainType = config.get(CONFIG_SECTION, OPTION_KEYCHAIN)
         keychain_func = keychain(keychainType)
-        theSMTPPassword = keychain_func(theSMTPServer)
+        theSMTPPassword = keychain_func(theSMTPServer, theSMTPLogin, 'generic')
     except TypeError:
         exit_forcing_print(ERROR_CONFIG_KEYCHAIN)
     except ConfigParser.NoOptionError:
