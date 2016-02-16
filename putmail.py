@@ -21,6 +21,7 @@ import os
 import sys
 import socket
 import datetime
+import keyring
 
 import subprocess as sb
 import shlex
@@ -141,13 +142,15 @@ def force_print(str):
 
 def check_status((code, message)):
     if code >= FIRST_ERROR_CODE:
-        exit_conditional_print(ERROR_OTHER % (code, message))
+		exit_conditional_print(ERROR_OTHER % (code, message))
 
 def keychain(keychainType):
-    if keychainType == 'osx':
-        return osxkeychain
+	if keychainType == 'osx':
+		return osxkeychain
+	elif keychainType == 'python':
+		return python_keychain
 
-def osxkeychain(service, user, passwordType="internet"):
+def osxkeychain(service, user, passwordType='generic'):
     cmd = """/usr/bin/security find-%s-password -gs %s -a %s""" % (passwordType, service, user)
     args = shlex.split(cmd)
     t = sb.check_output(args, stderr=sb.STDOUT)
@@ -155,6 +158,13 @@ def osxkeychain(service, user, passwordType="internet"):
     passwd = lines[0]
     passwd = passwd.split('"')[1]
     return passwd
+
+def python_keychain(service, user):
+	print service, user
+	password = keyring.get_password(service, user)
+	if not password:
+		print 'Password not found in keychaing'
+	return password
 
 ### Check for HOME present (needed later, checking now saves a lot of work) ###
 if not os.environ.has_key(HOME_EV):
@@ -371,7 +381,7 @@ if config.has_option(CONFIG_SECTION, OPTION_LOGIN): # Login/password
         # if config.has_option(CONFIG_SECTION, OPTION_KEYCHAIN):
         keychainType = config.get(CONFIG_SECTION, OPTION_KEYCHAIN)
         keychain_func = keychain(keychainType)
-        theSMTPPassword = keychain_func(theSMTPServer, theSMTPLogin, 'generic')
+        theSMTPPassword = keychain_func(theSMTPServer, theSMTPLogin)
     except TypeError:
         exit_forcing_print(ERROR_CONFIG_KEYCHAIN)
     except ConfigParser.NoOptionError:
